@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>妈咪母亲节快乐哦</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -16,6 +16,17 @@
             font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', cursive, sans-serif;
             overflow: hidden;
             position: relative;
+            touch-action: manipulation; /* 优化触摸响应 */
+        }
+
+        canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* 让点击穿透到下层元素和监听 */
+            z-index: 3;
         }
 
         /* 跳动大爱心 */
@@ -83,7 +94,7 @@
             box-shadow: 0 8px 20px rgba(255, 105, 135, 0.2);
         }
 
-        /* 飘浮小元素容器 */
+        /* 飘浮小元素容器（原有的鲜花爱心飘落） */
         .floating-items {
             position: fixed;
             top: 0;
@@ -118,7 +129,7 @@
         .fixed-flower {
             position: fixed;
             font-size: 55px;
-            opacity: 0.3;
+            opacity: 0.35;
             pointer-events: none;
             z-index: 0;
             animation: sway 3.5s ease-in-out infinite;
@@ -131,10 +142,10 @@
     </style>
 </head>
 <body>
-    <!-- 飘浮的爱心、鲜花、星星 -->
+    <!-- 原有的飘落鲜花/爱心 -->
     <div class="floating-items" id="floatingItems"></div>
 
-    <!-- 角落花花装饰 -->
+    <!-- 四角固定大花 -->
     <div class="fixed-flower" style="top: 4%; left: 4%; animation-delay: 0s;">🌺</div>
     <div class="fixed-flower" style="top: 8%; right: 6%; animation-delay: 1.2s; font-size: 48px;">🌸</div>
     <div class="fixed-flower" style="bottom: 12%; left: 5%; animation-delay: 2.1s;">🌼</div>
@@ -142,43 +153,353 @@
     <div class="fixed-flower" style="top: 45%; left: 2%; animation-delay: 1.8s; font-size: 42px;">💮</div>
     <div class="fixed-flower" style="top: 55%; right: 3%; animation-delay: 0.9s; font-size: 50px;">🌻</div>
 
-    <!-- 大爱心 -->
+    <!-- Canvas 用于触摸特效（点击绽放 + 滑动拖尾） -->
+    <canvas id="effectCanvas"></canvas>
+
+    <!-- 大爱心与祝福文字 -->
     <div class="heart-container">
         <div class="heart"></div>
     </div>
-
-    <!-- 你的祝福语 -->
     <h1>妈咪母亲节快乐哦！！耶耶耶！！</h1>
     <p>特别特别爱妈咪，我们一起吃饭一起lalaso吧~~</p>
 
     <script>
-        // 飘浮元素池：爱心、各种鲜花、亮闪闪
+        // ==================== 原有飘浮元素 ====================
         const items = ['❤️', '🌸', '🌼', '🌺', '🌷', '💐', '✨', '🌻', '💖', '🍃', '🌿', '💮'];
-
         function createFloatingItem() {
             const div = document.createElement('div');
             div.classList.add('float-item');
-            // 随机挑选一个可爱元素
             div.innerHTML = items[Math.floor(Math.random() * items.length)];
             div.style.left = Math.random() * 95 + '%';
             div.style.fontSize = (Math.random() * 28 + 20) + 'px';
             div.style.animationDuration = (Math.random() * 6 + 6) + 's';
             div.style.animationDelay = Math.random() * 1.5 + 's';
             document.getElementById('floatingItems').appendChild(div);
-
-            // 动画结束后清理掉，避免内存占用
-            div.addEventListener('animationend', () => {
-                div.remove();
-            });
+            div.addEventListener('animationend', () => div.remove());
         }
-
-        // 每 400ms 飘出一个新元素，整个屏幕一直有花花
         setInterval(createFloatingItem, 400);
+        for(let i=0; i<18; i++) setTimeout(createFloatingItem, i*120);
 
-        // 开局先飘一波，氛围直接拉满
-        for(let i = 0; i < 18; i++) {
-            setTimeout(createFloatingItem, i * 120);
+        // ==================== Canvas 交互特效 ====================
+        const canvas = document.getElementById('effectCanvas');
+        const ctx = canvas.getContext('2d');
+        let width, height;
+
+        function resizeCanvas() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
         }
-    </script>
-</body>
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // 粒子数组：存储所有活跃的“特效粒子”
+        let particles = [];
+
+        // 粒子类
+        class Particle {
+            constructor(x, y, type, text = '') {
+                this.x = x;
+                this.y = y;
+                this.type = type; // 'clickBurst', 'trail'
+                this.age = 0;
+                this.maxAge = type === 'clickBurst' ? 1.2 : 0.7; // 秒
+                this.scale = 1;
+                this.alpha = 1;
+                this.text = text; // 点击时出现的文字
+                // 物理属性（随机扩散）
+                this.vx = (Math.random() - 0.5) * 3;
+                this.vy = (Math.random() - 0.5) * 3 - 1; // 轻微上浮
+                this.rotation = Math.random() * Math.PI * 2;
+                this.rotSpeed = (Math.random() - 0.5) * 4;
+            }
+
+            update(dt) {
+                this.age += dt;
+                if (this.age >= this.maxAge) return false; // 粒子生命周期结束
+                const progress = this.age / this.maxAge;
+                if (this.type === 'clickBurst') {
+                    // 放大再缩小，透明度后期快速降低
+                    this.scale = 1 + Math.sin(progress * Math.PI) * 1.8;
+                    this.alpha = 1 - Math.pow(progress, 1.5);
+                } else if (this.type === 'trail') {
+                    // 拖尾粒子：逐渐缩小并消失
+                    this.scale = 1 * (1 - progress);
+                    this.alpha = 0.9 * (1 - progress);
+                }
+                this.x += this.vx;
+                this.y += this.vy;
+                this.rotation += this.rotSpeed;
+                return true;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                ctx.scale(this.scale, this.scale);
+                ctx.globalAlpha = this.alpha;
+
+                if (this.type === 'clickBurst') {
+                    // 画一朵大花或者爱心
+                    if (this.text) {
+                        // 文字特效
+                        ctx.font = `${28 * this.scale}px "PingFang SC", "Microsoft YaHei", sans-serif`;
+                        ctx.fillStyle = '#fff';
+                        ctx.shadowColor = '#ff6b81';
+                        ctx.shadowBlur = 10;
+                        ctx.fillText(this.text, -ctx.measureText(this.text).width/2,2, 10 10);
+                       );
+                        ctx.sh ctx.shadowColoradowColor = ' = 'transparent';
+                       transparent';
+                        ctx.sh ctx.shadowBladowBlur =ur = 0 0;
+                   ;
+                    } else } else {
+                        {
+                        //  // 画花朵画花朵 em emojioji
+                        ctx.font =
+                        ctx.font = `${40 `${40}}px sanspx sans-serif-serif`;
+                        ctx`;
+                        ctx.fillText.fillText('🌸('🌸', -', -2020, -, -2020);
+                   );
+                    }
+                } }
+                } else if else if (this (this.type === 'tra.type === 'trail')il') {
+                    //  {
+                    // 画小画小星星或星星或小花小花
+                    ctx
+                    ctx.font =.font = `${20 `${20}px}px sans-serif sans-serif`;
+                   `;
+                    ctx.fillText(Math.random() ctx.fillText(Math.random() >  > 0.0.5 ?5 ? '✨ '✨' :' : ' '💖',💖', -10 -10, -, -1010);
+               );
+                }
+                ctx }
+                ctx.restore.restore();
+           ();
+            }
+        }
+
+        }
+        }
+
+        // 创建点击绽放效果 // 创建点击绽放效果
+       
+        function create function createClickBClickBurst(xurst(x, y, y)) {
+            // {
+            // 主 主花朵花朵
+            particles
+            particles.push(new.push(new Particle(x Particle(x, y, y,, ' 'clickBclickBursturst'));
+            //'));
+            // 周围 周围散散落小落小粒子粒子
+           
+            for ( for (let ilet i = 0; = 0; i i < 12 < 12; i; i++)++) {
+                let {
+                let p = p = new Particle new Particle(x,(x, y, y, 'click 'clickBurstBurst');
+               ');
+                p.v p.vx =x = (Math (Math.random().random() -  - 0.0.5)5) *  * 66;
+                p;
+                p.vy.vy = ( = (Math.randomMath.random()() - - 0 0.5.5) *) * 6 6 -  - 1;
+                p1;
+                p.maxAge.maxAge =  = 0.0.8 +8 + Math.random Math.random() *() * 0 0.6.6;
+               ;
+                particles.push particles.push(p(p);
+           );
+            }
+            // }
+            // 偶尔 偶尔弹出一弹出一句甜甜句甜甜的话的话
+            const
+            const sweet sweetWords =Words = ['爱你 ['爱你', '', '耶!耶!', '', '妈咪',妈咪', 'l 'lalasoalaso', '', '❤️❤️', '🌸',', '🌸', '快乐 '快乐'];
+            if ('];
+            if (Math.randomMath.random() >() > 0 0.3.3)) {
+                let {
+                let word = word = sweetWords sweetWords[Math[Math.floor.floor(Math.random()(Math.random() * sweet * sweetWords.lengthWords.length)];
+               )];
+                let text let textParticleParticle = new = new Particle(x Particle(x, y, y -  - 20,20, 'click 'clickBurstBurst', word', word);
+               );
+                textP textParticle.vx =article.vx = 0 0;
+               ;
+                textP textParticle.article.vy =vy = -2 -2.5.5;
+               ;
+                textP textParticle.maxarticle.maxAge =Age = 1 1.4.4;
+               ;
+                particles.push particles.push(textP(textParticlearticle);
+           );
+            }
+        }
+        }
+
+        // }
+
+        // 创建 创建滑动滑动拖尾拖尾粒子粒子
+        function
+        function createTra createTrailPilParticle(xarticle(x, y, y) {
+            particles) {
+            particles.push(new.push(new Particle(x Particle(x, y, y, ', 'trailtrail'));
+       '));
+        }
+
+        }
+
+        //  // 触摸事件触摸事件监听监听
+        let
+        let is isTouTouching =ching = false false;
+        let;
+        let lastTra lastTrailTimeilTime =  = 00;
+
+        canvas;
+
+        canvas.addEventListener('.addEventListener('touchstarttouchstart', (', (e)e) => => {
+            e {
+            e.preventDefault.preventDefault();
+            const();
+            const touch = touch = e.t e.touchesouches[0[0];
+           ];
+            const x const x = touch = touch.clientX;
+           .clientX;
+            const y const y = touch = touch.clientY.clientY;
+           ;
+            create createClickBClickBurst(xurst(x, y, y);
+           );
+            isT isTouchingouching = true = true;
+            last;
+            lastTraTrailTime = performanceilTime = performance.now.now();
+        },();
+        }, { passive { passive: false: false });
+
+        });
+
+        canvas.addEventListener('touchmove', canvas.addEventListener('touchmove', (e (e) =>) => {
+            {
+            e.preventDefault e.preventDefault();
+           ();
+            if (! if (!isTisTouchingouching) return) return;
+           ;
+            const touch const touch = e = e.tou.touchesches[0[0];
+            const x];
+            const x = = touch.client touch.clientXX;
+            const;
+            const y = y = touch.client touch.clientYY;
+            const;
+            const now = now = performance.now performance.now();
+           ();
+            //  // 控制拖控制拖尾密度，每尾密度，每 25 25ms ms 生成一个生成一个粒子粒子
+            if
+            if (now (now - last - lastTrailTrailTime >Time > 25 25)) {
+                create {
+                createTrailTrailParticleParticle(x,(x, y y);
+                last);
+                lastTrailTrailTime =Time = now now;
+           ;
+            }
+        }, }
+        }, { passive { passive: false: false });
+
+        });
+
+        canvas.addEventListener canvas.addEventListener('t('touchendouchend', (e)', (e) => => {
+            e {
+            e.preventDefault.preventDefault();
+            is();
+            isTouTouching =ching = false false;
+       ;
+        });
+
+        // });
+
+        // 可选 可选：：鼠标鼠标支持支持（桌面（桌面调试调试）
+        canvas）
+        canvas.addEventListener('.addEventListener('mousedmousedown',own', (e (e) =>) => {
+            {
+            const x const x = e = e.clientX.clientX;
+           ;
+            const y const y = e = e.clientY.clientY;
+           ;
+            createClick createClickBurstBurst(x,(x, y y);
+            is);
+            isTouTouching = trueching = true;
+            last;
+            lastTrailTrailTime =Time = performance.now performance.now();
+       ();
+        });
+        });
+ canvas.addEventListener        canvas.addEventListener('m('mousemousemove',ove', (e (e) =>) => {
+            {
+            if (! if (!isTisTouchingouching) return) return;
+           ;
+            const now const now = performance = performance.now.now();
+            if (now();
+            if (now - last - lastTrailTrailTime >Time > 25 25)) {
+                create {
+                createTrailTrailParticleParticle(e.client(e.clientX,X, e.client e.clientYY);
+                last);
+                lastTrailTrailTime =Time = now now;
+           ;
+            }
+        }
+        });
+        canvas });
+        canvas.addEventListener('.addEventListener('mouseupmouseup', ()', () => => {
+            is {
+            isTouTouching =ching = false false;
+       ;
+        });
+        canvas.addEventListener(' });
+        canvas.addEventListener('mouseleavemouseleave', ()', () => => {
+            is {
+            isTouTouching =ching = false false;
+       ;
+        });
+
+        // });
+
+        // 动画 动画循环循环
+       
+        let let lastTimestamp lastTimestamp =  = 00;
+        function;
+        function animate(t animate(timestamp)imestamp) {
+            {
+            if (! if (!lastTimestamplastTimestamp) last) lastTimestamp =Timestamp = timestamp timestamp;
+            const;
+            const dt = dt = Math.min Math.min((timestamp((timestamp - last - lastTimestamp)Timestamp) / 1000 / 1000, , 0.0.05);05); //  // 防止大防止大deltadelta
+            last
+            lastTimestamp =Timestamp = timestamp timestamp;
+
+            //;
+
+            // 清 清空画空画布布
+            ctx
+            ctx.clearRect.clearRect(0(0, , 0,0, width, height width, height);
+
+            //);
+
+            // 更新 更新并绘制并绘制所有粒子
+            particles = particles.filter(p =>所有粒子
+            particles = particles.filter(p => {
+                const alive = {
+                const alive = p.update p.update(dt(dt);
+               );
+                if ( if (alivealive)) {
+                    p {
+                    p.draw(ctx.draw(ctx);
+               );
+                }
+                return alive;
+            }
+                return alive;
+            });
+
+            });
+
+            request requestAnimationFrame(AnimationFrame(animateanimate);
+       );
+        }
+        request }
+        requestAnimationFrameAnimationFrame(animate(animate);
+   );
+    </script </script>
+</>
+</bodybody>
 </html>
+</html>
+>
